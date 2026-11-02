@@ -1,11 +1,11 @@
+# Changelog
+
 ## 0.2.0 — Position-consistency check (2026-11-02)
 
 - Add optional double-orientation A/B evaluation to identify judgment instability caused by answer position; validate pair matching and fail closed when scores disagree.
 - Keep existing one-orientation behavior intact and preserve privacy of original labels in the private key.
 - Update GitHub Actions to current Node 24-compatible upstream actions and minimum read-only workflow permissions.
 - The tool still does not claim model efficacy or solve factual hallucinations automatically.
-
-# Changelog
 
 ## 0.1.2 — 2026-11-02
 - Identify the founder publicly as ماجد الجهني, without disclosing private contact details.
