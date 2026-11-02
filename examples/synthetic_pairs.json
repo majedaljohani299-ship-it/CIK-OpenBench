@@ -1,0 +1,9 @@
+{
+  "schema_version": "0.1",
+  "study_id": "synthetic-demo",
+  "pairs": [
+    {"pair_id": "S1", "case_id": "SYNTH-ARITH", "baseline": "2", "treatment": "4"},
+    {"pair_id": "S2", "case_id": "SYNTH-YESNO", "baseline": "No", "treatment": "Yes"},
+    {"pair_id": "S3", "case_id": "SYNTH-TEXT", "baseline": "Alpha", "treatment": "Beta"}
+  ]
+}

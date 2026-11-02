@@ -1,0 +1,22 @@
+{
+  "schema_version": "0.1",
+  "study_id": "synthetic-demo",
+  "judgments": [
+    {
+      "pair_id": "S1",
+      "winner": "A",
+      "critical_failures": []
+    },
+    {
+      "pair_id": "S2",
+      "winner": "B",
+      "critical_failures": []
+    },
+    {
+      "pair_id": "S3",
+      "winner": "tie",
+      "critical_failures": []
+    }
+  ],
+  "packet_sha256": "911d3187f097426d25b3542aa1133a86c5a540ee36f1093f71a15f2807599840"
+}
