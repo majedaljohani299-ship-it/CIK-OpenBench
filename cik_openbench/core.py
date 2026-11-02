@@ -116,25 +116,84 @@ def validate_pairs(doc: dict[str, Any]) -> list[dict[str, str]]:
     return validated
 
 
-def prepare(doc: dict[str, Any], *, seed: int | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+def prepare(doc: dict[str, Any], *, seed: int | None = None,
+            counterbalance: bool = False) -> tuple[dict[str, Any], dict[str, Any]]:
     pairs = validate_pairs(doc)
     random_seed = seed if seed is not None else secrets.randbits(64)
     rng = random.Random(random_seed)
     packet_pairs: list[dict[str, str]] = []
     mapping: dict[str, dict[str, str]] = {}
+    groups: list[dict[str, str]] = []
+    used_ids: set[str] = set()
     for pair in pairs:
         first_is_treatment = bool(rng.getrandbits(1))
         labels = {"A": "treatment", "B": "baseline"} if first_is_treatment else {"A": "baseline", "B": "treatment"}
-        mapping[pair["pair_id"]] = labels
-        packet_pairs.append({
-            "pair_id": pair["pair_id"],
-            "case_id": pair["case_id"],
-            "response_a": pair[labels["A"]],
-            "response_b": pair[labels["B"]],
-        })
+        if not counterbalance:
+            mapping[pair["pair_id"]] = labels
+            packet_pairs.append({
+                "pair_id": pair["pair_id"],
+                "case_id": pair["case_id"],
+                "response_a": pair[labels["A"]],
+                "response_b": pair[labels["B"]],
+            })
+            continue
+        # Random, opaque public packet IDs; source pair IDs are not released.
+        ids: list[str] = []
+        for assigned in (labels, {"A": labels["B"], "B": labels["A"]}):
+            while True:
+                public_id = f"cb-{rng.getrandbits(64):016x}"
+                if public_id not in used_ids:
+                    used_ids.add(public_id)
+                    break
+            ids.append(public_id)
+            mapping[public_id] = assigned
+            packet_pairs.append({
+                "pair_id": public_id,
+                "case_id": pair["case_id"],
+                "response_a": pair[assigned["A"]],
+                "response_b": pair[assigned["B"]],
+            })
+        groups.append({"first": ids[0], "swapped": ids[1]})
+    if counterbalance:
+        rng.shuffle(packet_pairs)
     packet = {"schema_version": SCHEMA, "study_id": doc["study_id"], "pairs": packet_pairs}
+    if counterbalance:
+        packet["counterbalanced"] = True
     key = {"schema_version": SCHEMA, "study_id": doc["study_id"], "packet_sha256": sha256(packet), "seed": random_seed, "mapping": mapping}
+    if counterbalance:
+        key["counterbalance_groups"] = groups
     return packet, key
+
+
+def _check_counterbalance(packet_items: list[dict[str, Any]],
+                          mappings: dict[str, dict[str, str]],
+                          key: dict[str, Any]) -> list[dict[str, str]]:
+    """Validate optional counterbalance metadata without trusting summary counts."""
+    if "counterbalance_groups" not in key:
+        return []
+    groups = key["counterbalance_groups"]
+    if not isinstance(groups, list) or not groups:
+        raise BenchError("Invalid counterbalance groups")
+    by_id = {item["pair_id"]: item for item in packet_items}
+    used: set[str] = set()
+    for group in groups:
+        if not isinstance(group, dict) or set(group) != {"first", "swapped"}:
+            raise BenchError("Invalid counterbalance pair metadata")
+        one, two = group["first"], group["swapped"]
+        if not isinstance(one, str) or not isinstance(two, str) or one == two:
+            raise BenchError("Invalid counterbalance pair IDs")
+        if one not in by_id or two not in by_id or one in used or two in used:
+            raise BenchError("Unknown, duplicate, or missing counterbalance pair")
+        used.update((one, two))
+        a, b = by_id[one], by_id[two]
+        if (a.get("case_id") != b.get("case_id") or
+            a["response_a"] != b["response_b"] or
+            a["response_b"] != b["response_a"] or
+            mappings[one]["A"] == mappings[two]["A"]):
+            raise BenchError("Counterbalance pair is not an exact reversed comparison")
+    if used != set(by_id):
+        raise BenchError("Counterbalance groups must cover every packet pair")
+    return groups
 
 
 def evaluate(packet: dict[str, Any], key: dict[str, Any], judgments: dict[str, Any]) -> dict[str, Any]:
@@ -159,6 +218,7 @@ def evaluate(packet: dict[str, Any], key: dict[str, Any], judgments: dict[str, A
         if not isinstance(pair, dict):
             raise BenchError(f"packet.pairs[{ix}] must be an object")
         pid = _required_nonempty_string(pair.get("pair_id"), "packet.pair_id")
+        _required_nonempty_string(pair.get("case_id"), "packet.case_id")
         _required_nonempty_string(pair.get("response_a"), "packet.response_a")
         _required_nonempty_string(pair.get("response_b"), "packet.response_b")
         if pid in pair_ids:
@@ -171,11 +231,17 @@ def evaluate(packet: dict[str, Any], key: dict[str, Any], judgments: dict[str, A
         val = mappings[pid]
         if not isinstance(val, dict) or set(val) != {"A", "B"} or set(val.values()) != {"baseline", "treatment"}:
             raise BenchError(f"Invalid key labels for pair {pid}")
+    if packet.get("counterbalanced", False) not in (False, True) or type(packet.get("counterbalanced", False)) is not bool:
+        raise BenchError("Invalid packet counterbalanced flag")
+    if bool(packet.get("counterbalanced", False)) != ("counterbalance_groups" in key):
+        raise BenchError("Counterbalance mode or private groups missing")
+    groups = _check_counterbalance(items, mappings, key)
 
     records = judgments.get("judgments")
     if not isinstance(records, list):
         raise BenchError("judgments must be a list")
     seen: set[str] = set()
+    actual_winner: dict[str, str] = {}
     stats = {"baseline_wins": 0, "treatment_wins": 0, "ties": 0,
              "baseline_critical_failures": 0, "treatment_critical_failures": 0}
     for ix, entry in enumerate(records):
@@ -191,6 +257,7 @@ def evaluate(packet: dict[str, Any], key: dict[str, Any], judgments: dict[str, A
         failures = entry.get("critical_failures", [])
         if not isinstance(failures, list) or any(not isinstance(label, str) or label not in ("A", "B") for label in failures) or len(set(failures)) != len(failures):
             raise BenchError("critical_failures must be a list of distinct 'A'/'B' labels")
+        actual_winner[pid] = "tie" if winner == "tie" else mappings[pid][winner]
         if winner == "tie":
             stats["ties"] += 1
         else:
@@ -199,13 +266,18 @@ def evaluate(packet: dict[str, Any], key: dict[str, Any], judgments: dict[str, A
             stats[f"{mappings[pid][label]}_critical_failures"] += 1
 
     missing = sorted(pair_ids - seen)
+    inconsistencies = [group for group in groups
+                       if group["first"] in actual_winner and group["swapped"] in actual_winner
+                       and actual_winner[group["first"]] != actual_winner[group["swapped"]]]
     if missing:
         status = "BLOCKED_INCOMPLETE"
     elif stats["baseline_critical_failures"] or stats["treatment_critical_failures"]:
         status = "BLOCKED_CRITICAL_FAILURE"
+    elif inconsistencies:
+        status = "BLOCKED_POSITION_INCONSISTENCY"
     else:
         status = "EVALUATED_NO_EFFICACY_CLAIM"
-    return {
+    report = {
         "schema_version": SCHEMA,
         "study_id": study_id,
         "packet_sha256": sha256(packet),
@@ -216,3 +288,10 @@ def evaluate(packet: dict[str, Any], key: dict[str, Any], judgments: dict[str, A
         **stats,
         "claim": "No real-model effectiveness or statistical significance is established by this tool.",
     }
+    if groups:
+        report["counterbalance_groups"] = len(groups)
+        report["independent_source_pairs"] = len(groups)
+        report["fully_judged_groups"] = sum(1 for group in groups if group["first"] in seen and group["swapped"] in seen)
+        report["position_inconsistencies"] = inconsistencies
+        report["note"] = "Swapped-order inconsistency is a warning about judge stability, not a measurement of model accuracy."
+    return report

@@ -4,7 +4,7 @@ title: "CIK OpenBench: Offline Blinded Paired Evaluation"
 type: software
 authors:
   - name: "ماجد الجهني"
-version: "0.1.2"
+version: "0.2.0"
 date-released: 2026-11-02
 license: MIT
 abstract: "A conservative offline blinded A/B evaluation harness; no AI-model efficacy claims."

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cik-openbench"
-version = "0.1.2"
+version = "0.2.0"
 description = "Offline blinded pair evaluation for research hypotheses; no model-efficacy claims"
 authors = [{name = "ماجد الجهني"}]
 readme = "README.md"

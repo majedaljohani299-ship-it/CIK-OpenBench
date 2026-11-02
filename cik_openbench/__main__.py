@@ -16,6 +16,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--packet", required=True)
     p.add_argument("--key", required=True)
     p.add_argument("--seed", type=int, default=None, help="For replayable examples; keep key private for real blind evaluations")
+    p.add_argument("--counterbalance", action="store_true", help="Evaluate both A/B orders to detect position-dependent judging")
     s = commands.add_parser("score", help="Score manually judged A/B pairs against private mapping")
     s.add_argument("--packet", required=True)
     s.add_argument("--key", required=True)
@@ -29,7 +30,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise BenchError("Input, blinded packet, and private key must have different paths")
             if Path(args.packet).exists() or Path(args.key).exists():
                 raise BenchError("Use new output paths; refusing to overwrite an existing packet or private key")
-            packet, key = prepare(read_json(args.input), seed=args.seed)
+            packet, key = prepare(read_json(args.input), seed=args.seed, counterbalance=args.counterbalance)
             write_private_json(args.key, key)
             try:
                 write_new_json(args.packet, packet)

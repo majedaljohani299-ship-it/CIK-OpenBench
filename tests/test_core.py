@@ -84,6 +84,93 @@ class BenchTests(unittest.TestCase):
             self.assertFalse(target.exists())
             self.assertFalse(key.exists())
 
+    def test_counterbalance_produces_opposite_orders_and_private_metadata(self):
+        packet, key = prepare(SAMPLE, seed=7, counterbalance=True)
+        self.assertEqual(len(packet["pairs"]), 2 * len(SAMPLE["pairs"]))
+        self.assertEqual(len(key["counterbalance_groups"]), len(SAMPLE["pairs"]))
+        self.assertNotIn("counterbalance_groups", packet)
+        self.assertEqual((packet, key), prepare(SAMPLE, seed=7, counterbalance=True))
+        by_id = {p["pair_id"]: p for p in packet["pairs"]}
+        for g in key["counterbalance_groups"]:
+            a, b = by_id[g["first"]], by_id[g["swapped"]]
+            self.assertEqual(a["response_a"], b["response_b"])
+            self.assertEqual(a["response_b"], b["response_a"])
+            self.assertEqual(a["case_id"], b["case_id"])
+        self.assertTrue(set(by_id).isdisjoint({p["pair_id"] for p in SAMPLE["pairs"]}))
+
+    def test_counterbalance_stable_judge_remains_no_efficacy_claim(self):
+        packet, key = prepare(SAMPLE, seed=7, counterbalance=True)
+        entries = []
+        for p in packet["pairs"]:
+            labels = key["mapping"][p["pair_id"]]
+            # Same underlying treatment wins regardless of left/right placement.
+            winner = next(k for k, v in labels.items() if v == "treatment")
+            entries.append({"pair_id": p["pair_id"], "winner": winner})
+        report = evaluate(packet, key, {"schema_version": "0.1", "study_id": "synthetic-demo", "packet_sha256": sha256(packet), "judgments": entries})
+        self.assertEqual(report["status"], "EVALUATED_NO_EFFICACY_CLAIM")
+        self.assertEqual(report["position_inconsistencies"], [])
+        self.assertEqual(report["counterbalance_groups"], 3)
+
+    def test_counterbalance_detects_left_side_preference(self):
+        packet, key = prepare(SAMPLE, seed=7, counterbalance=True)
+        entries = [{"pair_id": p["pair_id"], "winner": "A"} for p in packet["pairs"]]
+        report = evaluate(packet, key, {"schema_version": "0.1", "study_id": "synthetic-demo", "packet_sha256": sha256(packet), "judgments": entries})
+        self.assertEqual(report["status"], "BLOCKED_POSITION_INCONSISTENCY")
+        self.assertEqual(len(report["position_inconsistencies"]), 3)
+
+    def test_counterbalance_mixed_tie_and_winner_flags_instability(self):
+        packet, key = prepare(SAMPLE, seed=7, counterbalance=True)
+        entries = [{"pair_id": p["pair_id"], "winner": "tie"} for p in packet["pairs"]]
+        entries[0]["winner"] = "A"
+        report = evaluate(packet, key, {"schema_version": "0.1", "study_id": "synthetic-demo", "packet_sha256": sha256(packet), "judgments": entries})
+        self.assertEqual(report["status"], "BLOCKED_POSITION_INCONSISTENCY")
+        self.assertEqual(len(report["position_inconsistencies"]), 1)
+
+    def test_counterbalance_missing_judgment_blocks_first(self):
+        packet, key = prepare(SAMPLE, seed=7, counterbalance=True)
+        entries = [{"pair_id": p["pair_id"], "winner": "A"} for p in packet["pairs"][:-1]]
+        report = evaluate(packet, key, {"schema_version": "0.1", "study_id": "synthetic-demo", "packet_sha256": sha256(packet), "judgments": entries})
+        self.assertEqual(report["status"], "BLOCKED_INCOMPLETE")
+
+    def test_counterbalance_corrupted_pair_rejected(self):
+        packet, key = prepare(SAMPLE, seed=7, counterbalance=True)
+        bad = copy.deepcopy(packet)
+        by_id = {p["pair_id"]: p for p in bad["pairs"]}
+        by_id[key["counterbalance_groups"][0]["swapped"]]["response_a"] = "tampered"
+        key2 = copy.deepcopy(key)
+        key2["packet_sha256"] = sha256(bad)
+        doc = {"schema_version": "0.1", "study_id": "synthetic-demo", "packet_sha256": sha256(bad), "judgments": []}
+        with self.assertRaisesRegex(BenchError, "exact reversed"):
+            evaluate(bad, key2, doc)
+
+    def test_counterbalance_private_mode_cannot_be_silently_dropped(self):
+        packet, key = prepare(SAMPLE, seed=7, counterbalance=True)
+        bad_key = copy.deepcopy(key)
+        bad_key.pop("counterbalance_groups")
+        doc = {"schema_version": "0.1", "study_id": "synthetic-demo", "packet_sha256": sha256(packet), "judgments": []}
+        with self.assertRaisesRegex(BenchError, "mode or private groups missing"):
+            evaluate(packet, bad_key, doc)
+
+    def test_counterbalance_incomplete_group_mapping_rejected(self):
+        packet, key = prepare(SAMPLE, seed=7, counterbalance=True)
+        bad_key = copy.deepcopy(key)
+        bad_key["counterbalance_groups"].pop()
+        doc = {"schema_version": "0.1", "study_id": "synthetic-demo", "packet_sha256": sha256(packet), "judgments": []}
+        with self.assertRaisesRegex(BenchError, "cover every"):
+            evaluate(packet, bad_key, doc)
+
+    def test_cli_counterbalance_end_to_end(self):
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            inp, packet_path, key_path, judge_path, report_path = [root / x for x in ("input.json", "packet.json", "key.json", "judgments.json", "report.json")]
+            inp.write_text(json.dumps(SAMPLE))
+            self.assertEqual(cli_main(["prepare", "--input", str(inp), "--packet", str(packet_path), "--key", str(key_path), "--seed", "7", "--counterbalance"]), 0)
+            packet = json.loads(packet_path.read_text())
+            judge_path.write_text(json.dumps({"schema_version": "0.1", "study_id": "synthetic-demo", "packet_sha256": sha256(packet), "judgments": [{"pair_id": pair["pair_id"], "winner": "A"} for pair in packet["pairs"]]}))
+            self.assertEqual(cli_main(["score", "--packet", str(packet_path), "--key", str(key_path), "--judgments", str(judge_path), "--report", str(report_path)]), 2)
+            self.assertEqual(json.loads(report_path.read_text())["status"], "BLOCKED_POSITION_INCONSISTENCY")
+
     def test_reproducible_seed(self):
         self.assertEqual((self.packet, self.key), prepare(SAMPLE, seed=7))
 
