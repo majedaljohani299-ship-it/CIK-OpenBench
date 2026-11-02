@@ -14,3 +14,13 @@
 - Real independent model A/B: NOT RUN
 - Public repo and adoption: NOT ESTABLISHED
 - OpenAI application: NOT SUBMITTED
+
+## Verified publication — 2026-11-02
+
+- Repository: https://github.com/majedaljohani299-ship-it/CIK-OpenBench (public, under the founder's GitHub account).
+- Source release v0.1.2: 19 public files transferred from the allowlisted release archive and verified file-for-file against GitHub main.
+- Local Python test suite: 19/19 successful; this does not substitute for GitHub Actions execution.
+- GitHub Actions CI run result: NOT VERIFIED.
+- Independent adoption, external model validation, or evidence of broad ecosystem importance: NOT ESTABLISHED.
+- Codex for Open Source application: NOT SUBMITTED; eligibility and selection NOT ESTABLISHED.
+- Founder and public lead: ماجد الجهني. No private CIK or ACA source repositories were modified or copied.
